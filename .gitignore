@@ -1,17 +1,1 @@
-.venv/
-.vendor/
-.tmp/
-__pycache__/
-*.py[cod]
-.pytest_cache/
-/data/
-!/data/
-/data/*
-!/data/fetch_weather.py
-!/data/list_heatwave_days.py
-!/data/real/
-/data/real/*
-!/data/real/pvgis_nagpur_2023.csv
-!/data/real/pvgis_nagpur_2023.meta.json
-artifacts/*
-!artifacts/hive_policy.pt
+(empty output)
