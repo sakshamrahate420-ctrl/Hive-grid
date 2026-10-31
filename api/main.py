@@ -270,6 +270,11 @@ class SimulationManager:
             self.require(); peak=max((x['grid_import_kw'] for x in self.loads),default=0); baseline=max(self.baseline_loads,default=0)
             costs=[v['cost'] for v in self.home_stats.values()]; savings=[v['baseline_cost'] for v in self.home_stats.values()]
             result=summarize(baseline,peak,self.solar_total,self.solar_used,costs,savings,[v['comfort'] for v in self.home_stats.values()])
+            home_ids=[h.id for h in self.homes]
+            # Household-level detail so a society average can never hide one poor household.
+            result['per_home_comfort_deficit']=dict(zip(home_ids,result.pop('comfort_deficits')))
+            result['per_home_satisfaction']={k:round(v,4) for k,v in zip(home_ids,result.pop('preference_satisfaction'))}
+            result['worst_home_satisfaction']=min(result['per_home_satisfaction'].values(),default=1.0)
             result['per_home_cost']={h.id:self.home_stats[h.id]['cost'] for h in self.homes}; result['per_home_savings']={h.id:self.home_stats[h.id]['savings'] for h in self.homes}
             result['hard_constraint_violations']=self.violations; result['violations']=self.violations; result['violation_counts']=dict(self.violation_counts); result['comfort_degree_hours']=sum(v['comfort'] for v in self.home_stats.values())
             return result
