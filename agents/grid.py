@@ -8,8 +8,12 @@ class GridAgent:
         rule_price=self.world.price(self.step); rule_cap=self.world.cap_kw(self.n_homes,self.step)
         stress=self.world.is_stress(self.step,self.net_load,self.n_homes); price=rule_price; cap=rule_cap
         if learned_action is not None:
-            proposed_price=min(.3,max(0.,learned_action[0])*.3)
-            price=min(.24,max(.08,.5*rule_price+.5*proposed_price))
+            if self.world.tariff_is_configured:
+                band=self.world.p2p_price_band(self.step)
+                lower=band[0] if band else 0.0
+                base=float(self.world._tariff['simulation_energy_charge_rupees_per_kwh'])
+                proposed_price=max(0.0,min(1.0,float(learned_action[0])))*base*1.2
+                price=max(lower,min(rule_price,.5*rule_price+.5*proposed_price))
             stress=stress or learned_action[1]>=.75
             response_factor=min(1.,max(.75,learned_action[2]))
             cap=rule_cap*response_factor

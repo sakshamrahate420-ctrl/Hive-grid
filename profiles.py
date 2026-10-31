@@ -30,6 +30,19 @@ class HomeProfile:
     blocked_windows: tuple[tuple[int, int], ...]
     battery_reserve_pct: float = 0.0
 
+    @property
+    def initial_ev_soc_kwh(self) -> float:
+        """Synthetic overnight start: target SoC less this home's modeled trip energy."""
+        target_kwh = self.ev_battery_kwh * self.ev_target_pct
+        trip_kwh = min(max(0.0, self.ev_energy_need_kwh), target_kwh)
+        return max(0.0, target_kwh - trip_kwh)
+
+    @property
+    def initial_ev_charge_need_kwh(self) -> float:
+        """Energy needed to return the EV to its target before the morning deadline."""
+        target_kwh = self.ev_battery_kwh * self.ev_target_pct
+        return max(0.0, target_kwh - self.initial_ev_soc_kwh)
+
 def generate_profiles(n: int, seed: int) -> list[HomeProfile]:
     """Generate distinct, repeatable homes; n is restricted to 50–100."""
     if not 50 <= n <= 100:

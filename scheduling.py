@@ -17,7 +17,8 @@ class Schedule:
 
 def schedule_home(home: HomeProfile, step: int, temp: float, solar_kw: float, price: float, stress: bool,
                   ev_remaining_kwh: float | None = None, room_temp_c: float | None = None,
-                  battery_soc_kwh: float | None = None, pre_cool: bool = False) -> Schedule:
+                  battery_soc_kwh: float | None = None, pre_cool: bool = False,
+                  world: World | None = None) -> Schedule:
     """Choose feasible loads with peak avoidance and solar-first charging."""
     hour = (step % 96) / 4
     room = temp if room_temp_c is None else room_temp_c
@@ -44,7 +45,7 @@ def schedule_home(home: HomeProfile, step: int, temp: float, solar_kw: float, pr
     charge_room_kw = max(0, (home.battery_kwh - soc) / (.25 * home.battery_efficiency)) if home.battery_kwh else 0
     reserve_kwh=home.battery_kwh*getattr(home,"battery_reserve_pct",0.0)
     discharge_room_kw = max(0, (soc-reserve_kwh) * home.battery_efficiency / .25) if home.battery_kwh else 0
-    staggered_cheap_slot = price<=.08 and step in (40+flat%12,52+flat%12)
+    staggered_cheap_slot = world is not None and world.is_low_tariff(step) and step in (40+flat%12,52+flat%12)
     charging_opportunity = max(0, solar_kw-demand) + (home.battery_power_kw if staggered_cheap_slot else 0)
     charge = min(home.battery_power_kw, charge_room_kw, charging_opportunity) if home.battery_kwh else 0
     discharge = min(home.battery_power_kw, discharge_room_kw, max(0, demand - solar_kw)) if home.battery_kwh and 18 <= hour < 22 else 0
@@ -64,7 +65,7 @@ def schedule_horizon(home: HomeProfile, start_step: int, world: World, ev_remain
         pre_cool=bool(world.heatwave and world.heat_start-12<=step<world.heat_start and 15+group<=hour<16+group and solar>home.base_load_kw+home.ac_count*home.ac_kw)
         step_price=current_price if offset==0 and current_price is not None else world.price(step)
         step_stress=current_stress if offset==0 and current_stress is not None else stress
-        action=schedule_home(home,step,temp,solar,step_price*price_multiplier,step_stress,ev_left,room,soc,pre_cool)
+        action=schedule_home(home,step,temp,solar,step_price*price_multiplier,step_stress,ev_left,room,soc,pre_cool,world)
         schedules.append(action); ev_left=max(0,ev_left-action.ev_kw*.25)
         soc=min(home.battery_kwh,max(0,soc+action.battery_charge_kw*.25*home.battery_efficiency-action.battery_discharge_kw*.25/home.battery_efficiency))
         room=max(16,min(50,room+.015*(temp-room)-.7*action.ac_kw))

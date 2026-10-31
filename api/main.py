@@ -33,6 +33,8 @@ class StartRequest(BaseModel):
     seed: int = 7
     policy: str = "teacher"
     scenario: str = "summer"
+    demo_date: str | None = None
+    weather_year: int = Field(default=2023, ge=2005, le=2100)
 class StepsRequest(BaseModel): n_steps: int = Field(default=1, ge=1, le=96)
 class EventRequest(BaseModel): type: str = "heatwave"; start: int = Field(default=72, ge=0, le=95); end: int = Field(default=88, ge=1, le=96); cap_reduction_pct: float = Field(default=20, ge=0, le=80)
 class OverrideRequest(BaseModel): constraint: dict[str, Any] | None = None; text: str | None = None
@@ -67,6 +69,7 @@ class SimulationManager:
     """Thread-safe, resettable one-day simulation state."""
     def __init__(self):
         self.lock=RLock(); self.started=False; self.requests=load_requests()
+        self.last_request: StartRequest | None = None
         self.request_counter=max((int(x['id'].split('-')[-1]) for x in self.requests if x['id'].startswith('REQ-') and x['id'].split('-')[-1].isdigit()),default=0)
         self.reset()
     def reset(self):
@@ -85,7 +88,8 @@ class SimulationManager:
                     request['status']='Under Review'; request['execution']=None
                     request['admin_response']='A new simulation run started; review and apply this preference to activate it in this run.'
                     save_request(request)
-            self.homes=generate_profiles(req.n_homes, req.seed); self.world=World(req.seed); self.step=0; self.logs=[]; self.loads=[]; self.trades=[]; self.home_stats={h.id:{'cost':0.,'baseline_cost':0.,'comfort':0.,'savings':0.,'soc':h.battery_kwh*.5,'baseline_soc':h.battery_kwh*.5,'ev_initial_soc':h.ev_battery_kwh*.5,'ev_remaining':max(h.ev_energy_need_kwh,h.ev_battery_kwh*max(0,h.ev_target_pct-.5)),'baseline_ev_remaining':max(h.ev_energy_need_kwh,h.ev_battery_kwh*max(0,h.ev_target_pct-.5)),'ev_energy_delivered':0.,'baseline_ev_delivered':0.,'ev_energy_used':0.,'room_temp':h.temperature_setpoint_c,'baseline_room_temp':h.temperature_setpoint_c} for h in self.homes}; self.started=True; self.policy=req.policy; self.seed=req.seed; self.learned_model=None; self.learned_fallback=req.policy=='learned'; self.overrides={}; self.baseline_loads=[]; self.solar_total=0.; self.solar_used=0.; self.running_cost=0.; self.trades=[]; self.loads=[]; self.logs=[]; self.violations=0; self.violation_counts={'energy_balance':0,'ev_deadline':0,'temperature_comfort':0}; self.negotiation_round=0; self.price_multiplier=1.0; self.price_signal_vector=[1.0]*48; self.fairness_weights={}
+            self.homes=generate_profiles(req.n_homes, req.seed); self.world=World(req.seed, demo_date=req.demo_date, weather_year=req.weather_year); self.step=0; self.logs=[]; self.loads=[]; self.trades=[]; self.home_stats={h.id:{'cost':0.,'baseline_cost':0.,'comfort':0.,'savings':0.,'soc':h.battery_kwh*.5,'baseline_soc':h.battery_kwh*.5,'ev_initial_soc':h.initial_ev_soc_kwh,'ev_remaining':h.initial_ev_charge_need_kwh,'baseline_ev_remaining':h.initial_ev_charge_need_kwh,'ev_energy_delivered':0.,'baseline_ev_delivered':0.,'ev_energy_used':0.,'room_temp':h.temperature_setpoint_c,'baseline_room_temp':h.temperature_setpoint_c} for h in self.homes}; self.started=True; self.policy=req.policy; self.seed=req.seed; self.learned_model=None; self.learned_fallback=req.policy=='learned'; self.overrides={}; self.baseline_loads=[]; self.solar_total=0.; self.solar_used=0.; self.running_cost=0.; self.trades=[]; self.loads=[]; self.logs=[]; self.violations=0; self.violation_counts={'energy_balance':0,'ev_deadline':0,'temperature_comfort':0}; self.negotiation_round=0; self.price_multiplier=1.0; self.price_signal_vector=[1.0]*48; self.fairness_weights={}
+            self.last_request=req.model_copy(update={'demo_date':self.world.demo_date},deep=True)
             if req.scenario == 'heatwave': self.world.heatwave=True
             if req.policy == 'learned':
                 try:
@@ -143,7 +147,8 @@ class SimulationManager:
                         forecast_step=(s-47+offset)%96; forecast_temp,forecast_cloud,forecast_hot=self.world.weather(forecast_step)
                         forecast_stress=self.world.heatwave and self.world.heat_start<=forecast_step<self.world.heat_end
                         stat=self.home_stats[profile.id]; ev_soc=stat['ev_initial_soc']+stat['ev_energy_delivered']-stat['ev_energy_used']
-                        history.append([forecast_step/96,forecast_temp/50,forecast_cloud,self.world.solar_kw(profile.solar_kwp,forecast_step,forecast_cloud)/8,self.world.price(forecast_step)/.3,float(forecast_stress),profile.solar_kwp/8,profile.ac_count/4,profile.ac_kw/2,profile.ev_kw/8,profile.battery_kwh/10,profile.base_load_kw/2,profile.comfort_weight/1.5,profile.cost_weight/1.5,profile.flexibility_weight,profile.ev_energy_need_kwh/20,(stat['room_temp']-profile.temperature_setpoint_c)/10,(stat['soc']/profile.battery_kwh if profile.battery_kwh else 0)])
+                        if self.world.heatwave and not self.world.weather_is_real and self.world.heat_start<=forecast_step<self.world.heat_end: forecast_temp+=3
+                        history.append([forecast_step/96,forecast_temp/50,forecast_cloud,self.world.solar_kw(profile.solar_kwp,forecast_step,forecast_cloud)/8,self.world.price_feature(forecast_step),float(forecast_stress),profile.solar_kwp/8,profile.ac_count/4,profile.ac_kw/2,profile.ev_kw/8,profile.battery_kwh/10,profile.base_load_kw/2,profile.comfort_weight/1.5,profile.cost_weight/1.5,profile.flexibility_weight,profile.ev_energy_need_kwh/20,(stat['room_temp']-profile.temperature_setpoint_c)/10,(stat['soc']/profile.battery_kwh if profile.battery_kwh else 0)])
                     sequences.append(history)
                 batch=torch.tensor(sequences,dtype=torch.float32)
                 with torch.inference_mode():
@@ -158,7 +163,7 @@ class SimulationManager:
             try:
                 import torch
                 model_batch=batch.clone()
-                model_batch[:,-1,4]=min(1.,max(0.,price*society_price_factor/.3))
+                model_batch[:,-1,4]=min(1.,max(0.,self.world.price_feature(s)*society_price_factor))
                 model_batch[:,-1,5]=float(stress)
                 with torch.inference_mode(): predicted=self.learned_model(model_batch,torch.zeros(len(self.homes),dtype=torch.long)).tolist()
                 learned_predictions={h.id:predicted[i] for i,h in enumerate(self.homes)}
@@ -197,8 +202,9 @@ class SimulationManager:
             demand=projected['base_kw']+projected['ac_kw']+projected['ev_kw']+projected['geyser_kw']+projected['other_kw']
             net=demand+projected['battery_charge_kw']-projected['battery_discharge_kw']-solar
             offer_kwh=max(0,-net)*.25; bid_kwh=max(0,net)*.25
-            if offer_kwh>1e-9: offers.append({'home':h.id,'kwh':offer_kwh,'price':.04,'weight':1.0})
-            if bid_kwh>1e-9: bids.append({'home':h.id,'kwh':bid_kwh,'price':price,'weight':1/(1+stat['comfort'])})
+            p2p_band=self.world.p2p_price_band(s)
+            if p2p_band and offer_kwh>1e-9: offers.append({'home':h.id,'kwh':offer_kwh,'price':p2p_band[0],'weight':1.0})
+            if p2p_band and bid_kwh>1e-9: bids.append({'home':h.id,'kwh':bid_kwh,'price':min(p2p_band[1],price),'weight':1/(1+stat['comfort'])})
             row={'home':h.id,'solar_kw':solar,'load_kw':demand,'net_kw':net,'import_kw':max(0,net),'export_kw':max(0,-net),'cost':0.0}; rows.append(row); homes_by_id[h.id]=row; schedules[h.id]=projected
             solar_step+=solar*.25; used_step+=min(solar,demand+projected['battery_charge_kw'])*.25
             bstart,bend=effective.temperature_window; baseline_comfort=(bstart<=s<bend) if bstart<bend else (s>=bstart or s<bend)
@@ -206,21 +212,22 @@ class SimulationManager:
             baseline_room=stat['baseline_room_temp']
             baseline_ac=min(effective.ac_count*effective.ac_kw,max(0,(temp-baseline_room)*.015/.7+max(0,baseline_room-baseline_target)*.8))
             stat['baseline_room_temp']=max(16,min(50,baseline_room+.015*(temp-baseline_room)-.7*baseline_ac))
-            baseline_charge_kw=min(effective.battery_power_kw,max(0,(effective.battery_kwh-stat['baseline_soc'])/(.25*effective.battery_efficiency))) if effective.battery_kwh and price<=.08 else 0
+            baseline_charge_kw=min(effective.battery_power_kw,max(0,(effective.battery_kwh-stat['baseline_soc'])/(.25*effective.battery_efficiency))) if effective.battery_kwh and self.world.is_low_tariff(s) else 0
             stat['baseline_soc']=min(effective.battery_kwh,stat['baseline_soc']+baseline_charge_kw*.25*effective.battery_efficiency)
             deadline=effective.ev_deadline_step%96; ev_due=bool(effective.ev_kw and (s>=effective.ev_arrival_step or s<deadline))
             baseline_ev_kw=min(effective.ev_kw,stat['baseline_ev_remaining']/.25) if ev_due else 0
             flat=int(effective.id[1:]); geyser_baseline=72+flat%8; washer_baseline=72+flat%16
             quiet=any(start<=s<end for start,end in effective.blocked_windows)
             baseline_demand=effective.base_load_kw+baseline_ac+baseline_ev_kw+baseline_charge_kw+(.9 if effective.geyser and s in (geyser_baseline,geyser_baseline+1) else 0)+(.6 if effective.washing_machine and not quiet and washer_baseline<=s<washer_baseline+4 else 0)
-            baseline_net=baseline_demand-solar; baseline_cost=(max(0,baseline_net)*price-max(0,-baseline_net)*.04)*.25
+            baseline_net=baseline_demand-solar; baseline_cost=max(0,baseline_net)*price*.25
             stat['baseline_cost']+=baseline_cost; stat['baseline_ev_remaining']=max(0,stat['baseline_ev_remaining']-baseline_ev_kw*.25); stat['baseline_ev_delivered']+=baseline_ev_kw*.25; baseline_import+=max(0,baseline_net)
             exchanged=[encode_message(PriceSignal('SOCIETY',h.id,0,{'grid_price':price,'cap_kw':grid_cap,'stress':stress}))]
-            if offer_kwh>1e-9: exchanged.append(encode_message(P2POffer(h.id,'SOCIETY',0,{'kwh':offer_kwh,'price':.04})))
-            if bid_kwh>1e-9: exchanged.append(encode_message(P2PBid(h.id,'SOCIETY',0,{'kwh':bid_kwh,'price':price})))
+            if p2p_band and offer_kwh>1e-9: exchanged.append(encode_message(P2POffer(h.id,'SOCIETY',0,{'kwh':offer_kwh,'price':p2p_band[0]})))
+            if p2p_band and bid_kwh>1e-9: exchanged.append(encode_message(P2PBid(h.id,'SOCIETY',0,{'kwh':bid_kwh,'price':min(p2p_band[1],price)})))
             event={'timestamp':f'{s//4:02d}:{s%4*15:02d}','step':s,'role':'HOME','agent_id':h.id,'action':'scheduled household loads','shield_correction':corrections,'explanation':'Shifted flexible load using solar and tariff signals.','messages':exchanged,'policy':'teacher_fallback' if fallback and self.policy=='learned' else self.policy}
             self.logs.append(event); logs_by_home[h.id]=event
-        trades,unmatched=clear_market(offers,bids,.04,price); self.trades=[]
+        p2p_band=self.world.p2p_price_band(s)
+        trades,unmatched=clear_market(offers,bids,*(p2p_band or (0.0,0.0))); self.trades=[]
         for trade in trades:
             seller=homes_by_id[trade['seller']]; buyer=homes_by_id[trade['buyer']]; kw=trade['kwh']/.25
             seller['net_kw']+=kw; seller['export_kw']=max(0,seller['export_kw']-kw); buyer['net_kw']-=kw; buyer['import_kw']=max(0,buyer['import_kw']-kw)
@@ -232,7 +239,8 @@ class SimulationManager:
             logs_by_home[offer['home']]['messages'].append(encode_message(Reject('SOCIETY',offer['home'],0,{'reason':'no_crossing_bid','remaining_kwh':offer['kwh']})))
         for h in self.homes:
             row=homes_by_id[h.id]; st=self.home_stats[h.id]; action=schedules[h.id]
-            row['cost']+=(row['import_kw']*.25*price-row['export_kw']*.25*.04)
+            feed_in=p2p_band[0] if p2p_band else 0.0
+            row['cost']+=(row['import_kw']*.25*price-row['export_kw']*.25*feed_in)
             row['balance_residual_kwh']=balance(row['solar_kw']*.25,action['battery_discharge_kw']*.25,row['import_kw']*.25,row.get('p2p_bought_kwh',0),
                 action['base_kw']*.25,action['ac_kw']*.25,action['ev_kw']*.25,action['geyser_kw']*.25,action['other_kw']*.25,
                 action['battery_charge_kw']*.25,row['export_kw']*.25,row.get('p2p_sold_kwh',0))
@@ -289,6 +297,10 @@ async def invalid_requests(_, exc):
     return JSONResponse(status_code=422,content={'error':'validation_error','detail':jsonable_encoder(exc.errors())})
 @app.get('/health',response_model=ApiResponse)
 def health(): return {'status':'ok'}
+@app.get('/data/provenance',response_model=ApiResponse)
+def data_provenance():
+    world=manager.world or World(0)
+    return world.provenance()
 @app.get('/',include_in_schema=False)
 def demo_frontend():
     root=Path(__file__).resolve().parents[1]/'frontend'
@@ -297,7 +309,12 @@ def demo_frontend():
 @app.post('/simulation/start',response_model=ApiResponse)
 def start(req:StartRequest): return manager.start(req)
 @app.post('/simulation/reset',response_model=ApiResponse)
-def reset(): manager.reset(); return {'status':'reset'}
+def reset(restart:bool=False):
+    with manager.lock:
+        previous=manager.last_request if restart else None
+        manager.reset()
+        if previous is not None: return manager.start(previous)
+        return {'status':'reset'}
 @app.post('/simulation/step',response_model=ApiResponse)
 def step(req:StepsRequest): return manager.advance(req.n_steps)
 @app.post('/simulation/run',response_model=ApiResponse)

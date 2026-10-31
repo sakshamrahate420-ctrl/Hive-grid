@@ -43,12 +43,20 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
+let simulationCommandQueue: Promise<unknown> = Promise.resolve();
+function enqueueSimulationCommand<T>(command: () => Promise<T>): Promise<T> {
+  const next = simulationCommandQueue.then(command, command);
+  simulationCommandQueue = next.then(() => undefined, () => undefined);
+  return next;
+}
+
 export const backend = {
   state: () => request<BackendState>('/simulation/state'),
   start: (scenario: 'summer' | 'heatwave' = 'heatwave', policy: 'learned' | 'teacher' = 'learned') =>
-    request<BackendState>('/simulation/start', { method: 'POST', body: JSON.stringify({ n_homes: 56, seed: 7, scenario, policy }) }),
-  step: (n_steps = 1) => request<BackendState>('/simulation/step', { method: 'POST', body: JSON.stringify({ n_steps }) }),
-  reset: () => request<{status:string}>('/simulation/reset', { method: 'POST' }),
+    enqueueSimulationCommand(() => request<BackendState>('/simulation/start', { method: 'POST', body: JSON.stringify({ n_homes: 56, seed: 7, scenario, policy, demo_date: '2023-05-14', weather_year: 2023 }) })),
+  step: (n_steps = 1) => enqueueSimulationCommand(() => request<BackendState>('/simulation/step', { method: 'POST', body: JSON.stringify({ n_steps }) })),
+  run: () => enqueueSimulationCommand(() => request<{state:BackendState;metrics:Record<string,any>}>('/simulation/run', { method: 'POST' })),
+  reset: (restart = false) => enqueueSimulationCommand(() => request<BackendState | {status:string}>(`/simulation/reset${restart?'?restart=true':''}`, { method: 'POST' })),
   metrics: () => request<Record<string, any>>('/metrics'),
   timeseries: () => request<{steps:BackendStep[]}>('/timeseries'),
   homes: () => request<Array<Record<string, any>>>('/homes'),
@@ -59,4 +67,7 @@ export const backend = {
     request<BackendRequest>('/requests',{method:'POST',body:JSON.stringify({home_id:body.homeId,resident:body.resident,description:body.description,category:body.category,priority:body.priority,constraint:body.constraint,unsupported_fields:body.unsupportedFields})}),
   reviewRequest: (id:string,status:string,response:string) => request<BackendRequest>(`/requests/${encodeURIComponent(id)}/review`,{method:'POST',body:JSON.stringify({status,response})}),
   cancelRequest: (id:string) => request<BackendRequest>(`/requests/${encodeURIComponent(id)}/cancel`,{method:'POST'}),
+  provenance: () => request<DataProvenance>('/data/provenance'),
 };
+
+export type DataProvenance = {demo_date:string|null;weather:{status:string;source:string;database:string|null;cache:string|null;year:number;variables:string[]};solar:{status:string;source:string;derate:number|null};tariff:{status:string;config:string;currency_rates_are_assumptions:boolean;rupee_rates_configured:boolean;p2p_trading_enabled:boolean};household_loads:{status:string;source:string};runtime_internet_required:boolean};

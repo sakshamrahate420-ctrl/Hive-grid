@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "utility": "MSEDCL",
+  "consumer_category": "LT Residential (verify applicability for the society's actual connection)",
+  "currency": "INR",
+  "source": {
+    "title": "MSEDCL Tariff Documents (latest listed: MERC Case No. 75 of 2025, 25 March 2026)",
+    "url": "https://www.mahadiscom.in/en/consumer/tariff-details/",
+    "note": "The 09:00-17:00 solar window is the requested simulation structure, not a claim about the society's applicable tariff. Confirm the latest order, connection category, time bands, and rates before use."
+  },
+  "all_rupee_values_are_assumptions": true,
+  "assumption_marker": "ASSUMPTION_PLACEHOLDER_REPLACE_BEFORE_USE",
+  "billing_slabs": [
+    {
+      "consumption_kwh_from": null,
+      "consumption_kwh_to": null,
+      "energy_charge_rupees_per_kwh": null,
+      "status": "ASSUMPTION_PLACEHOLDER_REPLACE_BEFORE_USE"
+    }
+  ],
+  "simulation_energy_charge_rupees_per_kwh": null,
+  "simulation_energy_charge_status": "ASSUMPTION_PLACEHOLDER_REPLACE_BEFORE_USE",
+  "tod_slots": [
+    {"name": "night", "start_local": "00:00", "end_local": "06:00", "rebate_percent": null, "rebate_percent_status": "ASSUMPTION_PLACEHOLDER_REPLACE_BEFORE_USE"},
+    {"name": "off_peak_morning", "start_local": "06:00", "end_local": "09:00", "rebate_percent": null, "rebate_percent_status": "ASSUMPTION_PLACEHOLDER_REPLACE_BEFORE_USE"},
+    {
+      "name": "solar",
+      "start_local": "09:00",
+      "end_local": "17:00",
+      "rebate_percent_apr_sep": null,
+      "rebate_percent_oct_mar": null,
+      "rebate_percent_status": "ASSUMPTION_PLACEHOLDER_REPLACE_BEFORE_USE",
+      "rebate_rupees_per_kwh": null,
+      "rebate_rupees_status": "ASSUMPTION_PLACEHOLDER_REPLACE_BEFORE_USE"
+    },
+    {
+      "name": "peak_evening",
+      "start_local": "17:00",
+      "end_local": "24:00",
+      "charge_percent": null,
+      "charge_percent_status": "ASSUMPTION_PLACEHOLDER_REPLACE_BEFORE_USE",
+      "charge_rupees_per_kwh": null,
+      "charge_rupees_status": "ASSUMPTION_PLACEHOLDER_REPLACE_BEFORE_USE"
+    }
+  ],
+  "feed_in_rupees_per_kwh": null,
+  "feed_in_status": "ASSUMPTION_PLACEHOLDER_REPLACE_BEFORE_USE",
+  "runtime_note": "No rupee-rate assumptions are supplied. Until the placeholders are replaced, monetary dispatch and peer-to-peer trading are disabled; weather, solar modelling, comfort and grid-cap coordination still run."
+}
