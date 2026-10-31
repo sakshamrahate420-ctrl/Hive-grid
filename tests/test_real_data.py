@@ -56,6 +56,15 @@ def test_tariff_placeholders_disable_prices_and_p2p(tmp_path):
     assert not world.is_low_tariff(40)
 
 
+def test_repository_tariff_uses_labeled_assumptions_and_enables_p2p():
+    world = World(2)
+    band = world.p2p_price_band(40)
+    assert world.provenance()["tariff"]["status"] == "ASSUMED"
+    assert world.provenance()["tariff"]["p2p_trading_enabled"] is True
+    assert band is not None and band == (2.0, 8.5)
+    assert world.price_feature(40) > 0
+
+
 def test_configured_tariff_price_and_p2p_stay_in_band(tmp_path):
     _cache(tmp_path)
     tariff = {

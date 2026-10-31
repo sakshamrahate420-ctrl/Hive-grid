@@ -235,6 +235,8 @@ class SimulationManager:
             seller['p2p_money_earned']=seller.get('p2p_money_earned',0)+trade['kwh']*trade['price']; buyer['p2p_money_paid']=buyer.get('p2p_money_paid',0)+trade['kwh']*trade['price']
             seller['cost']-=trade['kwh']*trade['price']; buyer['cost']+=trade['kwh']*trade['price']; self.solar_used+=trade['kwh']; self.trades.append(trade)
             for home_id in (trade['seller'],trade['buyer']): logs_by_home[home_id]['messages'].append(encode_message(Accept('SOCIETY',home_id,0,{'trade':trade})))
+            trade_event={'timestamp':f'{s//4:02d}:{s%4*15:02d}','step':s,'role':'SOCIETY','agent_id':'SOCIETY','action':f"allocated {trade['kwh']:.2f} kWh solar from {trade['seller']} to {trade['buyer']}",'explanation':f"Matched local solar between homes at the explicitly assumed P2P rate of ₹{trade['price']:.2f}/kWh.",'trade':trade}
+            self.logs.append(trade_event); self.publish_event(trade_event)
         for offer in unmatched:
             logs_by_home[offer['home']]['messages'].append(encode_message(Reject('SOCIETY',offer['home'],0,{'reason':'no_crossing_bid','remaining_kwh':offer['kwh']})))
         for h in self.homes:
@@ -272,6 +274,10 @@ class SimulationManager:
             result=summarize(baseline,peak,self.solar_total,self.solar_used,costs,savings,[v['comfort'] for v in self.home_stats.values()])
             result['per_home_cost']={h.id:self.home_stats[h.id]['cost'] for h in self.homes}; result['per_home_savings']={h.id:self.home_stats[h.id]['savings'] for h in self.homes}
             result['hard_constraint_violations']=self.violations; result['violations']=self.violations; result['violation_counts']=dict(self.violation_counts); result['comfort_degree_hours']=sum(v['comfort'] for v in self.home_stats.values())
+            result['tariff_status']='ASSUMED' if self.world.tariff_is_assumed else ('CONFIGURED' if self.world.tariff_is_configured else 'UNSET')
+            result['p2p_trading_enabled']=self.world.p2p_is_configured
+            result['p2p_trade_count']=sum(len(x.get('p2p_trades', [])) for x in self.loads)
+            result['p2p_energy_traded_kwh']=sum(t['kwh'] for x in self.loads for t in x.get('p2p_trades', []))
             return result
 
 manager=SimulationManager(); app=FastAPI(title='HiveGrid API',version='1.0.0'); app.add_middleware(CORSMiddleware,allow_origins=['*'],allow_methods=['*'],allow_headers=['*'])

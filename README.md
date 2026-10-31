@@ -91,6 +91,8 @@ python eval.py --model artifacts/hive_policy.pt
 
 ## Verification and limits
 
+P2P solar matching is simulated and enabled with explicitly labeled tariff assumptions in `tariff/msedcl_tariff.json` (₹10/kWh grid base, ₹2/kWh feed-in, plus assumed time-of-day factors). These are demo placeholders, not verified MSEDCL rates. The dashboard provenance badge and `/metrics` report `ASSUMED`; trades are logged as Society Agent events and counted in metrics. Replace the assumptions with the applicable tariff before using them for any real cost estimate.
+
 Previously reported results from a seeded 50-home heatwave run were zero EV deadline, temperature comfort, or energy-balance violations, 8.84% peak reduction, and 0.962 Jain comfort. Those figures were measured with the earlier synthetic-weather scenario; they are not a result for the current PVGIS-backed scenario and do not show real-world performance or broad generalization.
 
 To run the simulator's checks and terminal smoke demo:

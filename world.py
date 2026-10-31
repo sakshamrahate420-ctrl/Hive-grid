@@ -129,25 +129,39 @@ class World:
     @property
     def tariff_is_configured(self) -> bool:
         value = self._tariff.get("simulation_energy_charge_rupees_per_kwh")
+        if value is None:
+            value = self._tariff.get("assumed_defaults", {}).get("simulation_energy_charge_rupees_per_kwh")
         return isinstance(value, (int, float)) and value >= 0
 
     @property
+    def tariff_is_assumed(self) -> bool:
+        return self.tariff_is_configured and (self._tariff.get("simulation_energy_charge_rupees_per_kwh") is None
+            or self._tariff.get("simulation_energy_charge_status") != "VERIFIED")
+
+    @property
     def p2p_is_configured(self) -> bool:
-        return self.tariff_is_configured and isinstance(self._tariff.get("feed_in_rupees_per_kwh"), (int, float))
+        feed_in = self._tariff.get("feed_in_rupees_per_kwh")
+        if feed_in is None:
+            feed_in = self._tariff.get("assumed_defaults", {}).get("feed_in_rupees_per_kwh")
+        return self.tariff_is_configured and isinstance(feed_in, (int, float)) and feed_in >= 0
 
     def tariff_price(self, step: int) -> float:
         """Return configured INR/kWh, or neutral zero when placeholders are unset."""
         if not self.tariff_is_configured:
             return 0.0
-        base = float(self._tariff["simulation_energy_charge_rupees_per_kwh"])
+        base_value = self._tariff.get("simulation_energy_charge_rupees_per_kwh")
+        base = float(base_value if base_value is not None else self._tariff["assumed_defaults"]["simulation_energy_charge_rupees_per_kwh"])
         hour = (step % 96) / 4
         month = self._selected_date.month if self._selected_date else 1
         slot = next((x for x in self._tariff.get("tod_slots", [])
                      if _time_hour(x["start_local"]) <= hour < _time_hour(x["end_local"], end_of_day=True)), None)
         if slot is None:
             return base
-        rebate = slot.get("rebate_percent_apr_sep" if 4 <= month <= 9 else "rebate_percent_oct_mar", slot.get("rebate_percent", 0))
-        charge = slot.get("charge_percent", 0)
+        defaults = self._tariff.get("assumed_defaults", {})
+        rebate = slot.get("rebate_percent_apr_sep" if 4 <= month <= 9 else "rebate_percent_oct_mar", slot.get("rebate_percent"))
+        if rebate is None and slot.get("name") == "solar": rebate = defaults.get("solar_rebate_percent", 0)
+        charge = slot.get("charge_percent")
+        if charge is None and slot.get("name") == "peak_evening": charge = defaults.get("evening_charge_percent", 0)
         # Rupee-specific adders/rebates are placeholders, so only official percent ToD
         # factors are applied. The configured base rate remains an operator-supplied value.
         return max(0.0, base * (1.0 - float(rebate or 0) / 100.0) * (1.0 + float(charge or 0) / 100.0))
@@ -155,7 +169,8 @@ class World:
     def p2p_price_band(self, step: int) -> tuple[float, float] | None:
         if not self.p2p_is_configured:
             return None
-        feed_in = float(self._tariff["feed_in_rupees_per_kwh"])
+        feed_in_value = self._tariff.get("feed_in_rupees_per_kwh")
+        feed_in = float(feed_in_value if feed_in_value is not None else self._tariff["assumed_defaults"]["feed_in_rupees_per_kwh"])
         grid_price = self.tariff_price(step)
         if feed_in > grid_price:
             LOGGER.warning("Tariff config has feed-in rate above grid price at step %d; P2P trading disabled", step)
@@ -209,10 +224,11 @@ class World:
         return self.tariff_price(step)
 
     def price_feature(self, step: int) -> float:
-        """Unitless tariff feature; no rupee defaults are introduced."""
+        """Return a unitless feature based on the configured or labeled assumed tariff."""
         if not self.tariff_is_configured:
             return 0.0
-        base=float(self._tariff["simulation_energy_charge_rupees_per_kwh"])
+        base_value=self._tariff.get("simulation_energy_charge_rupees_per_kwh")
+        base=float(base_value if base_value is not None else self._tariff["assumed_defaults"]["simulation_energy_charge_rupees_per_kwh"])
         return max(0.0,min(1.0,self.price(step)/max(base*1.2,1e-9)))
 
     def is_stress(self, step: int, net_load_kw: float = 0.0, n_homes: int = 1) -> bool:
@@ -236,7 +252,7 @@ class World:
             "demo_date": self.demo_date,
             "weather": {"status": "real_cached" if self.weather_is_real else "synthetic_fallback", "source": meta.get("source", "Synthetic seasonal generator"), "database": meta.get("radiation_database"), "cache": str(self._provider.csv_path) if self._provider else None, "year": self.weather_year, "variables": ["historical 2 m air temperature", "historical in-plane irradiance"] if self.weather_is_real else ["synthetic air temperature", "synthetic cloud proxy"]},
             "solar": {"status": "modeled_from_real_pvgis" if self.weather_is_real else "synthetic_model", "source": "PVGIS 1 kWp output x home kWp x 0.9 derate" if self.weather_is_real else "synthetic geometry/cloud model", "derate": SOLAR_DERATE if self.weather_is_real else None},
-            "tariff": {"status": "configured_assumption" if self.tariff_is_configured else "assumption_placeholders_unset", "config": str(self.tariff_path), "currency_rates_are_assumptions": True, "rupee_rates_configured": self.tariff_is_configured, "p2p_trading_enabled": self.p2p_is_configured},
+            "tariff": {"status": "ASSUMED" if self.tariff_is_assumed else ("configured" if self.tariff_is_configured else "assumption_placeholders_unset"), "config": str(self.tariff_path), "currency_rates_are_assumptions": True, "rupee_rates_configured": self.tariff_is_configured, "p2p_trading_enabled": self.p2p_is_configured},
             "household_loads": {"status": "synthetic", "source": "seeded household profile generator; no real household meter data"},
             "runtime_internet_required": False,
         }

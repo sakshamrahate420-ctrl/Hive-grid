@@ -10,6 +10,16 @@
   },
   "all_rupee_values_are_assumptions": true,
   "assumption_marker": "ASSUMPTION_PLACEHOLDER_REPLACE_BEFORE_USE",
+  "assumed_defaults": {
+    "status": "ASSUMED_PLACEHOLDER_NOT_OFFICIAL_TARIFF",
+    "simulation_energy_charge_rupees_per_kwh": 10.0,
+    "simulation_energy_charge_status": "ASSUMPTION_PLACEHOLDER_REPLACE_BEFORE_USE",
+    "feed_in_rupees_per_kwh": 2.0,
+    "feed_in_status": "ASSUMPTION_PLACEHOLDER_REPLACE_BEFORE_USE",
+    "solar_rebate_percent": 15.0,
+    "evening_charge_percent": 20.0,
+    "note": "Explicit demo assumptions only; replace after verifying the society's applicable MSEDCL order. These values are not represented as actual MSEDCL rates."
+  },
   "billing_slabs": [
     {
       "consumption_kwh_from": null,
