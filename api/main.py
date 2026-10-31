@@ -10,6 +10,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, Field, RootModel
 from profiles import generate_profiles
@@ -249,7 +250,10 @@ async def invalid_requests(_, exc):
 @app.get('/health',response_model=ApiResponse)
 def health(): return {'status':'ok'}
 @app.get('/',include_in_schema=False)
-def demo_frontend(): return FileResponse(Path(__file__).resolve().parents[1]/'frontend'/'index.html',media_type='text/html')
+def demo_frontend():
+    root=Path(__file__).resolve().parents[1]/'frontend'
+    built=root/'dist'/'index.html'
+    return FileResponse(built if built.exists() else root/'index.html',media_type='text/html')
 @app.post('/simulation/start',response_model=ApiResponse)
 def start(req:StartRequest): return manager.start(req)
 @app.post('/simulation/reset',response_model=ApiResponse)
@@ -359,3 +363,13 @@ def override(home_id:str,req:OverrideRequest):
     manager.overrides[home_id]=updated
     event={'timestamp':manager.state()['time'],'step':manager.step,'role':'HOME','agent_id':home_id,'action':'resident override','shield_correction':[],'explanation':f'Applied structured resident override: {constraint}','messages':[]}; manager.logs.append(event); manager.publish_event(event)
     return {'home_id':home_id,'constraint':{**constraint,**({'blocked_windows':[list(w) for w in constraint['blocked_windows']]} if 'blocked_windows' in constraint else {})},'status':'accepted'}
+
+_frontend_dist=Path(__file__).resolve().parents[1]/'frontend'/'dist'
+if (_frontend_dist/'assets').is_dir(): app.mount('/assets',StaticFiles(directory=_frontend_dist/'assets'),name='frontend-assets')
+
+@app.get('/{frontend_path:path}',include_in_schema=False)
+def frontend_routes(frontend_path:str):
+    """Serve the React app for browser routes when a production build exists."""
+    index=_frontend_dist/'index.html'
+    if index.exists(): return FileResponse(index,media_type='text/html')
+    raise HTTPException(404,detail='Frontend build not found. Run npm run build in frontend/.')

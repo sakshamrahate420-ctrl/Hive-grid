@@ -14,18 +14,22 @@ The profiles and weather are synthetic; this project does not use real household
 
 ## Run the demo on Windows
 
-Use Python 3.12 or later. In PowerShell, from the project folder:
+Use Python 3.12 or later and Node.js 18 or later. In PowerShell, from the project folder:
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
+npm --prefix frontend ci
+npm --prefix frontend run build
 python -m uvicorn api.main:app --reload
 ```
 
-Open [http://127.0.0.1:8000/](http://127.0.0.1:8000/) for the dashboard. Select **Learned model** or **Teacher baseline**, choose the number of homes and seed, then start the heatwave demo. Advance four intervals at a time or run the full day. API documentation is at [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs).
+Open [http://127.0.0.1:8000/](http://127.0.0.1:8000/) for the React dashboard. Start the learned-agent simulation from the overview or Simulation Studio; the dashboard advances the actual Python simulator and reads its homes, metrics, time series, and agent events. API documentation is at [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs).
 
-The dashboard shows current society grid import, the active cap, peak reduction, solar self-use, hard-constraint violations, a load/cap chart, and household status. These are simulated values, not live energy readings.
+For frontend-only development, start the backend on port 8000, then run `npm --prefix frontend run dev`. Vite proxies simulator API requests to `http://127.0.0.1:8000`; override this with `HIVEGRID_API_TARGET` if needed.
+
+The integrated dashboard shows current society demand, solar generation, grid import, learned-agent status, simulation time series, and backend-emitted agent events. The Home Agents page reads profiles and schedules from the active simulation. These are simulated values, not live energy readings. Other portal and administration views still use the frontend's local sample data unless explicitly connected to an API.
 
 ## Learned agents
 
