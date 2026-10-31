@@ -139,6 +139,13 @@ class World:
             or self._tariff.get("simulation_energy_charge_status") != "VERIFIED")
 
     @property
+    def tariff_base_price(self) -> float:
+        value = self._tariff.get("simulation_energy_charge_rupees_per_kwh")
+        if value is None:
+            value = self._tariff.get("assumed_defaults", {}).get("simulation_energy_charge_rupees_per_kwh")
+        return float(value) if isinstance(value, (int, float)) and value >= 0 else 0.0
+
+    @property
     def p2p_is_configured(self) -> bool:
         feed_in = self._tariff.get("feed_in_rupees_per_kwh")
         if feed_in is None:
@@ -149,8 +156,7 @@ class World:
         """Return configured INR/kWh, or neutral zero when placeholders are unset."""
         if not self.tariff_is_configured:
             return 0.0
-        base_value = self._tariff.get("simulation_energy_charge_rupees_per_kwh")
-        base = float(base_value if base_value is not None else self._tariff["assumed_defaults"]["simulation_energy_charge_rupees_per_kwh"])
+        base = self.tariff_base_price
         hour = (step % 96) / 4
         month = self._selected_date.month if self._selected_date else 1
         slot = next((x for x in self._tariff.get("tod_slots", [])
@@ -227,8 +233,7 @@ class World:
         """Return a unitless feature based on the configured or labeled assumed tariff."""
         if not self.tariff_is_configured:
             return 0.0
-        base_value=self._tariff.get("simulation_energy_charge_rupees_per_kwh")
-        base=float(base_value if base_value is not None else self._tariff["assumed_defaults"]["simulation_energy_charge_rupees_per_kwh"])
+        base=self.tariff_base_price
         return max(0.0,min(1.0,self.price(step)/max(base*1.2,1e-9)))
 
     def is_stress(self, step: int, net_load_kw: float = 0.0, n_homes: int = 1) -> bool:

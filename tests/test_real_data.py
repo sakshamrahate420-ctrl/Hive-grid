@@ -6,6 +6,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from api.main import app
+from agents.grid import GridAgent
 from collect import _date_partitions
 from market import clear_market
 from world import PVGISWeatherProvider, World
@@ -63,6 +64,14 @@ def test_repository_tariff_uses_labeled_assumptions_and_enables_p2p():
     assert world.provenance()["tariff"]["p2p_trading_enabled"] is True
     assert band is not None and band == (2.0, 8.5)
     assert world.price_feature(40) > 0
+
+
+def test_grid_agent_uses_resolved_assumed_tariff():
+    world = World(2)
+    agent = GridAgent(world)
+    agent.observe(step=0, net_load=100, n_homes=56)
+    signal = agent.act(learned_action=[0.5, 0.5, 1.0])
+    assert 0 <= signal["price"] <= world.price(0)
 
 
 def test_configured_tariff_price_and_p2p_stay_in_band(tmp_path):

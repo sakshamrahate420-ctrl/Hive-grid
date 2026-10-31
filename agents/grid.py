@@ -11,7 +11,7 @@ class GridAgent:
             if self.world.tariff_is_configured:
                 band=self.world.p2p_price_band(self.step)
                 lower=band[0] if band else 0.0
-                base=float(self.world._tariff['simulation_energy_charge_rupees_per_kwh'])
+                base=self.world.tariff_base_price
                 proposed_price=max(0.0,min(1.0,float(learned_action[0])))*base*1.2
                 price=max(lower,min(rule_price,.5*rule_price+.5*proposed_price))
             stress=stress or learned_action[1]>=.75
