@@ -6,6 +6,10 @@ from typing import Any
 from dataclasses import replace
 from functools import wraps
 from pathlib import Path
+from datetime import datetime
+import json
+import sqlite3
+from contextlib import closing
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -32,19 +36,55 @@ class StartRequest(BaseModel):
 class StepsRequest(BaseModel): n_steps: int = Field(default=1, ge=1, le=96)
 class EventRequest(BaseModel): type: str = "heatwave"; start: int = Field(default=72, ge=0, le=95); end: int = Field(default=88, ge=1, le=96); cap_reduction_pct: float = Field(default=20, ge=0, le=80)
 class OverrideRequest(BaseModel): constraint: dict[str, Any] | None = None; text: str | None = None
+class ResidentRequestCreate(BaseModel):
+    home_id: str
+    resident: str
+    description: str
+    category: str
+    priority: str = "Preferred"
+    constraint: dict[str, Any] = Field(default_factory=dict)
+    unsupported_fields: list[str] = Field(default_factory=list)
+class ResidentRequestReview(BaseModel):
+    status: str
+    response: str = ""
 class ApiResponse(RootModel[Any]):
     """Pydantic response envelope for dynamically shaped API resources."""
 
+_request_db_path=Path(__file__).resolve().parents[1]/'data'/'hivegrid_requests.sqlite3'
+def _request_connection():
+    _request_db_path.parent.mkdir(parents=True,exist_ok=True)
+    connection=sqlite3.connect(_request_db_path,timeout=10)
+    connection.execute('CREATE TABLE IF NOT EXISTS resident_requests (id TEXT PRIMARY KEY, payload TEXT NOT NULL)')
+    return connection
+def load_requests():
+    with closing(_request_connection()) as connection:
+        with connection: return [json.loads(row[0]) for row in connection.execute('SELECT payload FROM resident_requests ORDER BY rowid DESC')]
+def save_request(item):
+    with closing(_request_connection()) as connection:
+        with connection: connection.execute('INSERT OR REPLACE INTO resident_requests(id,payload) VALUES(?,?)',(item['id'],json.dumps(item)))
+
 class SimulationManager:
     """Thread-safe, resettable one-day simulation state."""
-    def __init__(self): self.lock = RLock(); self.started = False; self.reset()
+    def __init__(self):
+        self.lock=RLock(); self.started=False; self.requests=load_requests()
+        self.request_counter=max((int(x['id'].split('-')[-1]) for x in self.requests if x['id'].startswith('REQ-') and x['id'].split('-')[-1].isdigit()),default=0)
+        self.reset()
     def reset(self):
         with getattr(self, 'lock', RLock()):
+            for request in getattr(self,'requests',[]):
+                if request['status']=='Applied':
+                    request['status']='Under Review'; request['execution']=None; request['admin_response']='Simulation reset; review and apply this preference again to the new run.'
+                    save_request(request)
             self.started=False; self.step=0; self.homes=[]; self.world=None; self.logs=[]; self.loads=[]; self.trades=[]; self.home_stats={}; self.running_cost=0.0; self.solar_total=0.0; self.solar_used=0.0; self.overrides={}; self.baseline_loads=[]; self.violations=0; self.violation_counts={'energy_balance':0,'ev_deadline':0,'temperature_comfort':0}; self.negotiation_round=0; self.price_multiplier=1.0; self.price_signal_vector=[1.0]*48; self.fairness_weights={}; self.event_subscribers=set()
     def start(self, req: StartRequest):
         if req.policy not in ('teacher', 'learned'): raise HTTPException(400, detail='policy must be teacher or learned')
         if req.scenario not in ('summer','heatwave'): raise HTTPException(400,detail='scenario must be summer or heatwave')
         with self.lock:
+            for request in self.requests:
+                if request['status']=='Applied':
+                    request['status']='Under Review'; request['execution']=None
+                    request['admin_response']='A new simulation run started; review and apply this preference to activate it in this run.'
+                    save_request(request)
             self.homes=generate_profiles(req.n_homes, req.seed); self.world=World(req.seed); self.step=0; self.logs=[]; self.loads=[]; self.trades=[]; self.home_stats={h.id:{'cost':0.,'baseline_cost':0.,'comfort':0.,'savings':0.,'soc':h.battery_kwh*.5,'baseline_soc':h.battery_kwh*.5,'ev_initial_soc':h.ev_battery_kwh*.5,'ev_remaining':max(h.ev_energy_need_kwh,h.ev_battery_kwh*max(0,h.ev_target_pct-.5)),'baseline_ev_remaining':max(h.ev_energy_need_kwh,h.ev_battery_kwh*max(0,h.ev_target_pct-.5)),'ev_energy_delivered':0.,'baseline_ev_delivered':0.,'ev_energy_used':0.,'room_temp':h.temperature_setpoint_c,'baseline_room_temp':h.temperature_setpoint_c} for h in self.homes}; self.started=True; self.policy=req.policy; self.seed=req.seed; self.learned_model=None; self.learned_fallback=req.policy=='learned'; self.overrides={}; self.baseline_loads=[]; self.solar_total=0.; self.solar_used=0.; self.running_cost=0.; self.trades=[]; self.loads=[]; self.logs=[]; self.violations=0; self.violation_counts={'energy_balance':0,'ev_deadline':0,'temperature_comfort':0}; self.negotiation_round=0; self.price_multiplier=1.0; self.price_signal_vector=[1.0]*48; self.fairness_weights={}
             if req.scenario == 'heatwave': self.world.heatwave=True
             if req.policy == 'learned':
@@ -267,7 +307,7 @@ def state(): need(); return manager.state()
 @app.get('/homes',response_model=ApiResponse)
 def homes():
     with manager.lock:
-        need(); return [{'profile':h.__dict__,'schedule':manager.loads[-1]['homes'][i] if manager.loads else None,'battery_soc_kwh':manager.home_stats[h.id]['soc'],'ev_soc_pct':min(1,max(0,(manager.home_stats[h.id]['ev_initial_soc']+manager.home_stats[h.id]['ev_energy_delivered']-manager.home_stats[h.id]['ev_energy_used'])/h.ev_battery_kwh)) if h.ev_battery_kwh else 0,'ev_remaining_kwh':manager.home_stats[h.id]['ev_remaining'],'comfort_deficit':manager.home_stats[h.id]['comfort'],'today_cost':manager.home_stats[h.id]['cost'],'today_savings':manager.home_stats[h.id]['savings']} for i,h in enumerate(manager.homes)]
+        need(); return [{'profile':h.__dict__,'active_constraints':dict(manager.overrides.get(h.id,{})),'schedule':manager.loads[-1]['homes'][i] if manager.loads else None,'battery_soc_kwh':manager.home_stats[h.id]['soc'],'ev_soc_pct':min(1,max(0,(manager.home_stats[h.id]['ev_initial_soc']+manager.home_stats[h.id]['ev_energy_delivered']-manager.home_stats[h.id]['ev_energy_used'])/h.ev_battery_kwh)) if h.ev_battery_kwh else 0,'ev_remaining_kwh':manager.home_stats[h.id]['ev_remaining'],'comfort_deficit':manager.home_stats[h.id]['comfort'],'today_cost':manager.home_stats[h.id]['cost'],'today_savings':manager.home_stats[h.id]['savings']} for i,h in enumerate(manager.homes)]
 @app.get('/homes/{home_id}',response_model=ApiResponse)
 def home(home_id:str):
     need(); result=next((x for x in homes() if x['profile']['id']==home_id),None)
@@ -322,12 +362,14 @@ def override(home_id:str,req:OverrideRequest):
         text=req.text.lower(); found=re.search(r'(\d+(?:\.\d+)?)\s*(?:c|°)',text)
         constraint={'temperature_setpoint_c':float(found.group(1))} if found else {}
         if not constraint: raise HTTPException(400,detail='Could not parse text; send a structured constraint object')
-    allowed={'ev_deadline_step','ev_target_pct','temperature_setpoint_c','temperature_window','blocked_windows'}
+    allowed={'ev_deadline_step','ev_target_pct','battery_reserve_pct','temperature_setpoint_c','temperature_window','blocked_windows'}
     unknown=set(constraint)-allowed
     if unknown: raise HTTPException(400,detail=f'Unsupported constraint fields: {sorted(unknown)}')
     if 'ev_deadline_step' in constraint and (not isinstance(constraint['ev_deadline_step'],int) or not 0<=constraint['ev_deadline_step']<96): raise HTTPException(400,detail='EV deadline must be an integer in [0, 95]')
     if 'ev_target_pct' in constraint and not 0<=float(constraint['ev_target_pct'])<=1: raise HTTPException(400,detail='EV target must be in [0, 1]')
     if ('ev_deadline_step' in constraint or 'ev_target_pct' in constraint) and not h.ev_kw: raise HTTPException(400,detail='This home has no EV to apply EV charging constraints to')
+    if 'battery_reserve_pct' in constraint and not 0<=float(constraint['battery_reserve_pct'])<=1: raise HTTPException(400,detail='Battery reserve must be in [0, 1]')
+    if 'battery_reserve_pct' in constraint and not h.battery_kwh: raise HTTPException(400,detail='This home has no battery to apply a reserve constraint to')
     if 'temperature_setpoint_c' in constraint and not 18<=float(constraint['temperature_setpoint_c'])<=30: raise HTTPException(400,detail='Temperature setpoint must be in [18, 30] C')
     if 'temperature_window' in constraint:
         window=constraint['temperature_window']
@@ -363,6 +405,79 @@ def override(home_id:str,req:OverrideRequest):
     manager.overrides[home_id]=updated
     event={'timestamp':manager.state()['time'],'step':manager.step,'role':'HOME','agent_id':home_id,'action':'resident override','shield_correction':[],'explanation':f'Applied structured resident override: {constraint}','messages':[]}; manager.logs.append(event); manager.publish_event(event)
     return {'home_id':home_id,'constraint':{**constraint,**({'blocked_windows':[list(w) for w in constraint['blocked_windows']]} if 'blocked_windows' in constraint else {})},'status':'accepted'}
+
+def request_json(item):
+    return {'id':item['id'],'homeId':item['home_id'],'resident':item['resident'],'description':item['description'],
+        'date':item['date'],'category':item['category'],'priority':item['priority'],'status':item['status'],
+        'adminResponse':item['admin_response'],'updated':item['updated'],'constraint':item['constraint'],
+        'unsupportedFields':item['unsupported_fields'],'execution':item.get('execution')}
+
+@app.get('/requests',response_model=ApiResponse)
+def resident_requests(home_id:str|None=None):
+    with manager.lock:
+        items=manager.requests if home_id is None else [x for x in manager.requests if x['home_id']==home_id]
+        return [request_json(x) for x in items]
+
+@app.post('/requests',response_model=ApiResponse)
+def create_resident_request(req:ResidentRequestCreate):
+    with manager.lock:
+        if not req.home_id.startswith('H') or not req.home_id[1:].isdigit(): raise HTTPException(400,detail='Invalid home ID')
+        if manager.started and not any(h.id==req.home_id for h in manager.homes): raise HTTPException(404,detail='Home not found in the active simulation')
+        if req.priority not in ('Critical','Preferred','Flexible'): raise HTTPException(400,detail='Invalid request priority')
+        manager.request_counter+=1; now=datetime.now().astimezone().strftime('%b %d, %Y, %I:%M %p')
+        item={'id':f'REQ-{manager.request_counter:04d}','home_id':req.home_id,'resident':req.resident.strip(),
+            'description':req.description.strip(),'date':datetime.now().astimezone().strftime('%b %d, %Y'),
+            'category':req.category,'priority':req.priority,'status':'Submitted','admin_response':'','updated':now,
+            'constraint':dict(req.constraint),'unsupported_fields':list(req.unsupported_fields),'execution':None}
+        if not item['resident'] or not item['description']: raise HTTPException(400,detail='Resident name and request description are required')
+        manager.requests.insert(0,item)
+        save_request(item)
+        return request_json(item)
+
+@app.post('/requests/{request_id}/review',response_model=ApiResponse)
+@synchronized
+def review_resident_request(request_id:str,req:ResidentRequestReview):
+    item=next((x for x in manager.requests if x['id']==request_id),None)
+    if item is None: raise HTTPException(404,detail='Request not found')
+    if item['status'] in ('Cancelled','Rejected'): raise HTTPException(409,detail=f'Request is already {item["status"].lower()}')
+    if item['status']=='Applied' and req.status in ('Approved','Applied'): raise HTTPException(409,detail='This request has already been applied. Submit a new request to change the active constraint.')
+    if req.status not in ('Under Review','Scheduled','Rejected','Approved','Applied'): raise HTTPException(400,detail='Unsupported request status')
+    if req.status in ('Approved','Applied'):
+        if not manager.started: raise HTTPException(409,detail='Start a simulation before applying resident preferences')
+        profile=next((h for h in manager.homes if h.id==item['home_id']),None)
+        if profile is None: raise HTTPException(404,detail='Home not found in the active simulation')
+        constraint=dict(item['constraint']); unsupported=list(item['unsupported_fields'])
+        if not profile.ev_kw:
+            if 'ev_deadline_step' in constraint or 'ev_target_pct' in constraint: unsupported.append('EV charging preference (this home has no EV)')
+            constraint.pop('ev_deadline_step',None); constraint.pop('ev_target_pct',None)
+        if not profile.battery_kwh:
+            if 'battery_reserve_pct' in constraint: unsupported.append('Battery reserve (this home has no battery)')
+            constraint.pop('battery_reserve_pct',None)
+        if not constraint: raise HTTPException(422,detail='This request has no constraints the current simulator can apply. It remains open for a manual response.')
+        try: result=override(item['home_id'],OverrideRequest(constraint=constraint))
+        except HTTPException as exc: raise HTTPException(exc.status_code,detail=f'Preference could not be applied: {exc.detail}')
+        item['status']='Applied'; item['constraint']=result['constraint']; item['unsupported_fields']=list(dict.fromkeys(unsupported))
+        item['execution']={'status':'queued','step':manager.step,'time':manager.state()['time'],'constraint':result['constraint']}
+        default=f'Applied to {item["home_id"]}; the home agent will enforce it from the next simulation interval.'
+        if item['unsupported_fields']: default+=f' Not enforced by this simulator: {", ".join(item["unsupported_fields"])}.'
+        item['admin_response']=req.response.strip() or default
+    else:
+        item['status']=req.status
+        item['admin_response']=req.response.strip() or f'Request marked {req.status.lower()} by the society team.'
+        if req.status=='Rejected': item['execution']=None
+    item['updated']=datetime.now().astimezone().strftime('%b %d, %Y, %I:%M %p')
+    save_request(item)
+    return request_json(item)
+
+@app.post('/requests/{request_id}/cancel',response_model=ApiResponse)
+@synchronized
+def cancel_resident_request(request_id:str):
+    item=next((x for x in manager.requests if x['id']==request_id),None)
+    if item is None: raise HTTPException(404,detail='Request not found')
+    if item['status'] not in ('Submitted','Under Review','Scheduled'): raise HTTPException(409,detail='This request can no longer be cancelled')
+    item['status']='Cancelled'; item['updated']=datetime.now().astimezone().strftime('%b %d, %Y, %I:%M %p'); item['admin_response']='Cancelled by the resident.'
+    save_request(item)
+    return request_json(item)
 
 _frontend_dist=Path(__file__).resolve().parents[1]/'frontend'/'dist'
 if (_frontend_dist/'assets').is_dir(): app.mount('/assets',StaticFiles(directory=_frontend_dist/'assets'),name='frontend-assets')

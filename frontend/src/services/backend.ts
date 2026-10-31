@@ -23,6 +23,13 @@ export type BackendStep = {
   homes: Array<{home:string; solar_kw:number; load_kw:number; net_kw:number}>;
 };
 
+export type BackendRequest = {
+  id:string; homeId:string; resident:string; description:string; date:string; category:string;
+  priority:'Critical'|'Preferred'|'Flexible'; status:'Submitted'|'Under Review'|'Approved'|'Rejected'|'Scheduled'|'Applied'|'Cancelled';
+  adminResponse:string; updated:string; constraint:Record<string,number|number[]>; unsupportedFields:string[];
+  execution:{status:string;step:number;time:string;constraint:Record<string,unknown>}|null;
+};
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...init,
@@ -47,4 +54,9 @@ export const backend = {
   homes: () => request<Array<Record<string, any>>>('/homes'),
   events: () => request<{events:Array<Record<string, any>>}>('/events'),
   gridEvent: () => request('/grid/event', { method: 'POST', body: JSON.stringify({ type:'heatwave', start:72, end:88, cap_reduction_pct:20 }) }),
+  requests: (homeId?:string) => request<BackendRequest[]>(`/requests${homeId?`?home_id=${encodeURIComponent(homeId)}`:''}`),
+  createRequest: (body:Pick<BackendRequest,'homeId'|'resident'|'description'|'category'|'priority'|'constraint'|'unsupportedFields'>) =>
+    request<BackendRequest>('/requests',{method:'POST',body:JSON.stringify({home_id:body.homeId,resident:body.resident,description:body.description,category:body.category,priority:body.priority,constraint:body.constraint,unsupported_fields:body.unsupportedFields})}),
+  reviewRequest: (id:string,status:string,response:string) => request<BackendRequest>(`/requests/${encodeURIComponent(id)}/review`,{method:'POST',body:JSON.stringify({status,response})}),
+  cancelRequest: (id:string) => request<BackendRequest>(`/requests/${encodeURIComponent(id)}/cancel`,{method:'POST'}),
 };

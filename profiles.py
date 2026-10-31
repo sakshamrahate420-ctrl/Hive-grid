@@ -28,6 +28,7 @@ class HomeProfile:
     temperature_setpoint_c: float
     temperature_window: tuple[int, int]
     blocked_windows: tuple[tuple[int, int], ...]
+    battery_reserve_pct: float = 0.0
 
 def generate_profiles(n: int, seed: int) -> list[HomeProfile]:
     """Generate distinct, repeatable homes; n is restricted to 50–100."""

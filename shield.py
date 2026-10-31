@@ -16,7 +16,8 @@ def project(action: dict[str, Any], home: HomeProfile, step: int | None = None, 
     discharge_limit=home.battery_power_kw if home.battery_kwh else 0
     if battery_soc_kwh is not None:
         charge_limit=min(charge_limit,max(0,home.battery_kwh-battery_soc_kwh)/(.25*home.battery_efficiency))
-        discharge_limit=min(discharge_limit,max(0,battery_soc_kwh)*home.battery_efficiency/.25)
+        reserve_kwh=home.battery_kwh*getattr(home,"battery_reserve_pct",0.0)
+        discharge_limit=min(discharge_limit,max(0,battery_soc_kwh-reserve_kwh)*home.battery_efficiency/.25)
     for key, limit in (("ac_kw", home.ac_count * home.ac_kw), ("ev_kw", ev_limit), ("battery_charge_kw", charge_limit), ("battery_discharge_kw", discharge_limit)):
         value = max(0.0, min(float(result.get(key, 0)), limit))
         if value != result.get(key, 0): corrections.append(f"clamped {key}")

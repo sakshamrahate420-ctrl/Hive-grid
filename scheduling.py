@@ -42,7 +42,8 @@ def schedule_home(home: HomeProfile, step: int, temp: float, solar_kw: float, pr
     demand = home.base_load_kw + ac + ev + geyser + other
     soc = home.battery_kwh * .5 if battery_soc_kwh is None else battery_soc_kwh
     charge_room_kw = max(0, (home.battery_kwh - soc) / (.25 * home.battery_efficiency)) if home.battery_kwh else 0
-    discharge_room_kw = max(0, soc * home.battery_efficiency / .25) if home.battery_kwh else 0
+    reserve_kwh=home.battery_kwh*getattr(home,"battery_reserve_pct",0.0)
+    discharge_room_kw = max(0, (soc-reserve_kwh) * home.battery_efficiency / .25) if home.battery_kwh else 0
     staggered_cheap_slot = price<=.08 and step in (40+flat%12,52+flat%12)
     charging_opportunity = max(0, solar_kw-demand) + (home.battery_power_kw if staggered_cheap_slot else 0)
     charge = min(home.battery_power_kw, charge_room_kw, charging_opportunity) if home.battery_kwh else 0

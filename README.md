@@ -10,7 +10,7 @@ HiveGrid is a multi-agent energy system simulation for a housing society. Home a
 - **The peer-to-peer market** matches home solar offers with household bids using a midpoint price.
 - The simulation runs for 96 steps, each representing 15 minutes. It uses deterministic synthetic Nagpur-like weather and tariffs.
 
-The profiles and weather are synthetic; this project does not use real household meter data. The demo generates profiles automatically. Resident constraints can be overridden through the API, but the frontend does not yet include a preference editor.
+The profiles and weather are synthetic; this project does not use real household meter data. The demo generates profiles automatically. Residents can submit structured preference requests in the portal; supported constraints take effect only after a society administrator approves and applies them.
 
 ## Run the demo on Windows
 
@@ -29,7 +29,13 @@ Open [http://127.0.0.1:8000/](http://127.0.0.1:8000/) for the React dashboard. S
 
 For frontend-only development, start the backend on port 8000, then run `npm --prefix frontend run dev`. Vite proxies simulator API requests to `http://127.0.0.1:8000`; override this with `HIVEGRID_API_TARGET` if needed.
 
-The integrated dashboard shows current society demand, solar generation, grid import, learned-agent status, simulation time series, and backend-emitted agent events. The Home Agents page reads profiles and schedules from the active simulation. These are simulated values, not live energy readings. Other portal and administration views still use the frontend's local sample data unless explicitly connected to an API.
+The integrated dashboard shows current society demand, solar generation, grid import, learned-agent status, simulation time series, and backend-emitted agent events. The Home Agents page reads profiles and schedules from the active simulation. These are simulated values, not live energy readings. Admin and resident request pages use backend records; login, invitations, and other portal views remain demo-only.
+
+## Resident request approval
+
+Requests are stored in SQLite at `data/hivegrid_requests.sqlite3` and persist across backend restarts. Approval applies supported constraints to the selected home in the active simulation: temperature setpoint/window, EV deadline/charge target, and minimum battery reserve. The home's safety checks reject infeasible constraints. A successful approval is recorded as **Applied** and queued for the next simulation interval. Requests can still contain unsupported flexible-appliance or free-text preferences; the review page identifies those so an approval does not imply they were enforced. Applying a request requires a running simulation. Resetting the simulation clears active overrides and returns applied requests to review.
+
+This portal is a local prototype without real authentication or access control. Do not expose its request endpoints to the public internet or use it to control physical equipment.
 
 ## Learned agents
 
